@@ -1,0 +1,3 @@
+# Build outputs. dist/ is the folder `make dist` builds to drop into a server.
+dist/
+coverage.out

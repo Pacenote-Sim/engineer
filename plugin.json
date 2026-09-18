@@ -1,0 +1,52 @@
+{
+  "name": "engineer",
+  "version": "0.2.0",
+  "author": "Pacenote",
+  "description": "A race engineer for your drivers, written by Anthropic's Claude with your own API key: corner cues in practice, the radio in a race, a debrief and setup changes after the stint, and a reading of each driver for the team.",
+  "interface_version": 3,
+  "binary": "engineer",
+  "capabilities": {
+    "events": [
+      "lap.completed",
+      "stint.finished"
+    ],
+    "asks": [
+      "voice"
+    ],
+    "network": true,
+    "calls": [
+      "api.anthropic.com"
+    ],
+    "reads_driver_data": true,
+    "database": true,
+    "http": {
+      "title": "Engineer",
+      "routes": [
+        {
+          "path": "/",
+          "access": "admin"
+        },
+        {
+          "path": "/agent",
+          "access": "admin"
+        },
+        {
+          "path": "/me",
+          "access": "driver"
+        },
+        {
+          "path": "/laps",
+          "access": "driver"
+        },
+        {
+          "path": "/cues",
+          "access": "driver"
+        },
+        {
+          "path": "/debrief",
+          "access": "driver"
+        }
+      ]
+    }
+  }
+}

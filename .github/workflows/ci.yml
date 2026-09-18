@@ -1,0 +1,101 @@
+# The checks the Makefile runs, run on every change.
+#
+# The store is half of this plugin and a join cannot be tested against a fake,
+# so the test job carries a PostgreSQL of its own and runs the whole suite
+# against it; the coverage floor is measured with it. A checkout builds against
+# the tagged plugin and protocol releases in go.mod, which is what an operator
+# building the plugin gets too.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: go test with PostgreSQL (${{ matrix.go }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.26", "stable"]
+    services:
+      postgres:
+        # The major the server's release package pins, so what this tests
+        # against is the PostgreSQL an operator runs it in.
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: pacenote
+          POSTGRES_PASSWORD: pacenote
+          POSTGRES_DB: pacenote
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pacenote -d pacenote"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PACENOTE_TEST_DATABASE_URL: postgres://pacenote:pacenote@localhost:5432/pacenote?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Build and vet
+        run: |
+          make build
+          make vet
+
+      - name: Test, the store included
+        run: make test-postgres
+
+      - name: Coverage
+        run: make cover
+
+      # Once each. Not a measurement — a benchmark that no longer compiles is
+      # one nobody finds until they need it.
+      - name: Benchmarks still run
+        run: make bench-smoke
+
+      - name: The plugin folder builds
+        run: make dist
+
+  lint:
+    name: golangci-lint, gofumpt, tidy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2 # matches the local toolchain; Renovate bumps it
+          args: --build-tags postgres
+
+      - name: gofumpt
+        run: |
+          go install mvdan.cc/gofumpt@v0.12.0
+          test -z "$(gofumpt -l .)" || { gofumpt -l .; exit 1; }
+
+      # -diff fails rather than rewriting, so the module graph a tag builds from
+      # is the one that was reviewed.
+      - name: go mod tidy is a no-op
+        run: go mod tidy -diff

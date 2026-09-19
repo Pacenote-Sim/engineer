@@ -60,12 +60,26 @@ that would be equally true of a different lap.`
 const cueRules = `Write one line to be spoken aloud for each corner, just before the driver reaches that corner on
 the next lap. Obey all of it:
 
-- One sentence, or two short ones. Never a paragraph.
+- At most three sentences, and shorter is better. Never a paragraph.
 - Only facts from the input. No invented corner numbers, no invented times.
-- A line is about the corner it is for and no other. If you name it, name it as "Turn 4", with that
-  corner's own number from the list you were given.
+- A line is about the corner it is for and no other, and it starts by naming that corner — "Turn 4,
+  brake twenty metres later" — with the corner's own number from the list you were given, so the
+  driver hears which corner before hearing what to do, as a digit or as a word, once, and with the
+  word for a corner in front of it — "Turn 4", not "Four". Name no other corner.
 - Spell units as words: "kilometres per hour", never "km/h". No degree or percent signs.
 - Second person, present tense. Imperative where it is advice.
+- Each line has its own word limit, given with its corner: the line is spoken on the straight before
+  the corner and has to be over before the driver brakes, and a longer one is cut. Corners listed
+  together are too close for a line each: write one line for them, name each of them, and keep to
+  the one limit given.
+- Say as much as the words allow and no more. A corner given twenty words is a corner you may
+  explain: what the driver did, what it cost, what to do instead. A corner given six is one
+  instruction and nothing else.
+- What a driver acts on in a corner is where they brake, how hard and how they let the brake go, the
+  line they take through it, the gear, and when the power comes back. Those are what the
+  measurements describe, so name the one that cost the time here — the braking point against the
+  reference, brake still on at the apex, an apex taken early with the exit paid for, the throttle
+  late — and give the fix in those terms.
 - One fix per corner, never two, and make it measurable. "Brake earlier" is worth nothing; "brake
   twenty metres earlier" is an instruction a driver can carry out. Use the distances, pressures,
   speeds and gears from that corner, and only those: where a measurement is missing, say the fix
@@ -73,7 +87,8 @@ the next lap. Obey all of it:
 - A pressure is a percentage, said as words: "ease to seventy-five percent by turn-in, ten at the
   apex". Round a distance to the nearest five metres and a speed to the nearest whole number;
   nothing here is measured finer than that.
-- Leave out a corner with nothing worth saying. A driver told about every corner hears none of them.`
+- Leave out a corner with nothing worth saying, and never write more lines than you were asked for. A
+  driver told about every corner hears none of them.`
 
 // raceLine and practiceLine are the one sentence that differs between a cue
 // during a race and one in practice. They are separate parts because they are
@@ -151,16 +166,20 @@ func lapTool(maxWords int, turns []int, setupOpen bool) anthropic.Tool {
 	props := map[string]any{
 		"cues": map[string]any{
 			"type":     "array",
-			"maxItems": len(turns),
+			"maxItems": min(len(turns), MaxCueLines),
 			"description": "One line per corner worth a line, each spoken just before that corner on the " +
-				"next lap. Leave out a corner with nothing worth saying.",
+				"next lap. Leave out a corner with nothing worth saying; take the worst corners first.",
 			"items": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"turn": map[string]any{"type": "integer", "enum": turns, "description": "The corner the line is for."},
+					"turn": map[string]any{
+						"type": "integer", "enum": turns,
+						"description": "The corner the line is for; for corners listed together, the first of them.",
+					},
 					"line": map[string]any{
-						"type":        "string",
-						"description": fmt.Sprintf("The spoken line, at most %d words.", maxWords),
+						"type": "string",
+						"description": fmt.Sprintf("The spoken line, within the words given for its corner, "+
+							"never more than %d.", maxWords),
 					},
 				},
 				"required": []string{"turn", "line"},
@@ -265,15 +284,31 @@ func profileTool() anthropic.Tool {
 
 // reportFacts renders a client's report for the lap's cues. Everything here is
 // already exact.
+//
+// A report that carries a reference has every corner compared against the same
+// corner on that lap, which is what turns "you were slow here" into "you brake
+// twenty metres early here". A report without one is still worth coaching from,
+// in absolutes.
 func reportFacts(rep lapReport, notes []string) string {
+	return reportFactsFor(rep, planLines(rep, kindFor(rep.Session)), notes)
+}
+
+// reportFactsFor is reportFacts with the lap already planned into groups.
+func reportFactsFor(rep lapReport, groups []cueGroup, notes []string) string {
 	var b strings.Builder
 	if rep.LapMs > 0 || rep.SpokenLap != "" {
 		fmt.Fprintf(&b, "Lap %d, %s.\n", rep.Lap, spokenOr(rep.SpokenLap, rep.LapMs))
 	} else {
 		fmt.Fprintf(&b, "Lap %d.\n", rep.Lap)
 	}
-	if rep.Reference != "" {
+	switch {
+	case rep.Reference == "":
+	case rep.DeltaMs != 0 || rep.LapMs > 0:
 		fmt.Fprintf(&b, "Against %s: %s.\n", rep.Reference, delta(rep.DeltaMs))
+	default:
+		// A lap reported before it ended has no time yet, so it has no gap
+		// either. Its corners are still each measured against that lap's.
+		fmt.Fprintf(&b, "Every corner below is compared with %s.\n", rep.Reference)
 	}
 	if rep.TrackLengthM > 0 {
 		fmt.Fprintf(&b, "The circuit is %d metres round.\n", rep.TrackLengthM)
@@ -282,10 +317,11 @@ func reportFacts(rep lapReport, notes []string) string {
 	if len(rep.Corners) == 0 {
 		b.WriteString("\nNo corner lost time. Do not name a turn.\n")
 	} else {
-		b.WriteString("\nThe corners that lost time, worst first. Write one line for each that is worth one, to be " +
-			"spoken just before the driver reaches it next lap. These are the only turns you may name:\n")
-		for i := range rep.Corners {
-			b.WriteString(cornerLine(rep.Corners[i], rep.TrackLengthM))
+		fmt.Fprintf(&b, "\nThe corners that lost time, worst first. Write one line for each that is worth one, to be "+
+			"spoken just before the driver reaches it next lap, and at most %d lines in all. Each has the words "+
+			"that fit in front of it. These are the only turns you may name:\n", min(len(groups), MaxCueLines))
+		for _, g := range byReport(groups) {
+			b.WriteString(groupFacts(g, rep.TrackLengthM))
 		}
 	}
 	if rep.SetupOpen {

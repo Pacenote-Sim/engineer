@@ -25,6 +25,13 @@ import (
 // client that measures something new tomorrow must not break the coach it is
 // talking to today.
 
+// MaxLagPct bounds the distance between a corner's apex and the point the
+// throttle came back, in thousandths of the lap. A fifth of the lap is not a
+// corner's exit, it is a measurement that went wrong on the way here, and a
+// coach that reads it aloud tells the driver that three kilometres separate
+// their apex from their throttle.
+const MaxLagPct = 200
+
 // MaxCornersPerLap bounds a report. The longest circuits anyone races have
 // about thirty corners; forty leaves room and stops a report being a payload.
 const MaxCornersPerLap = 40
@@ -59,6 +66,19 @@ type lapReport struct {
 	Reference string `json:"reference,omitempty"`
 	// DeltaMs is the lap time against the reference: positive is slower.
 	DeltaMs int `json:"delta_ms,omitempty"`
+	// Early marks the report a client sends the moment Turn 1 is passed, so
+	// that Turn 1 has a line a whole lap early whatever the straight is worth.
+	// It is insurance: the full lap follows at the last corner and writes Turn
+	// 1 again with everything else in view, and that line is the one usually
+	// heard. So an early report is written but not spoken — buying audio for a
+	// line that is replaced before it is played is the one cost here with
+	// nothing on the other side of it.
+	Early bool `json:"early,omitempty"`
+	// Silent says the client will not play what it is sent: no plugin on it
+	// makes sound, or the driver has turned it off. The lines are written and
+	// filed as always and no audio is bought for them, because audio is paid
+	// for by the character and a driver reading their lines hears none of it.
+	Silent bool `json:"silent,omitempty"`
 	// SetupOpen reports that the car can be changed in this session. When it
 	// can, the coach notes what the car is doing, lap by lap, for the setup
 	// advice after the stint; on a fixed setup it says nothing about the car.
@@ -77,7 +97,23 @@ func parseLapReport(body []byte) (lapReport, error) {
 	if err := rep.validate(); err != nil {
 		return lapReport{}, err
 	}
+	rep.clean()
 	return rep, nil
+}
+
+// clean drops the measurements a coach must not repeat. A report is a client's
+// arithmetic, and a number that cannot be true of a corner is left out rather
+// than spoken: the rest of the corner is still worth a line.
+func (rep *lapReport) clean() {
+	for i := range rep.Corners {
+		c := &rep.Corners[i]
+		if c.ThrottleLag < 0 || c.ThrottleLag > MaxLagPct {
+			c.ThrottleLag = 0
+		}
+		if c.RefThrottleLag < 0 || c.RefThrottleLag > MaxLagPct {
+			c.RefThrottleLag = 0
+		}
+	}
 }
 
 func (rep lapReport) validate() error {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -275,7 +276,7 @@ func TestALineForTheWrongTurnIsDropped(t *testing.T) {
 	got := cuesOf(t, res)
 	r.Len(got.Cues, 1, "a dropped line took the good ones with it, or was not dropped")
 	r.Equal(9, got.Cues[0].Turn)
-	r.Equal("Carry more speed.", got.Cues[0].Line)
+	r.Equal("Turn 9. Carry more speed.", got.Cues[0].Line, "a line that named no corner has its own put first")
 
 	// It still cost money, and the operator is told.
 	r.EqualValues(400, res.Usage.InputTokens)
@@ -319,7 +320,7 @@ func TestATurnInQuotesIsStillATurn(t *testing.T) {
 	res = postReport(t, e4, open)
 	r.Equal(http.StatusOK, res.Status, string(res.Body))
 	r.Len(cuesOf(t, res).Cues, 2)
-	r.Equal("Hold the brake later.", cuesOf(t, res).Cues[0].Line)
+	r.Equal("Turn 1. Hold the brake later.", cuesOf(t, res).Cues[0].Line)
 	r.Equal([]string{"The front washes out."}, cuesOf(t, res).SetupNotes)
 
 	// And the list alone as a string.
@@ -814,4 +815,51 @@ func TestTheClockDefaultsToTheRealOne(t *testing.T) {
 	e.now = nil
 	r.WithinDuration(time.Now(), e.clock(), time.Minute,
 		"a plugin built without a clock has none")
+}
+
+// Corners too close for a line each are one line, filed under the first of
+// them whichever the model named; and a lap never gets more lines than the
+// plan allows, however many the model wrote.
+func TestJoinedCornersAreOneLineAndALapIsCapped(t *testing.T) {
+	t.Parallel()
+	r := require.New(t)
+
+	rep := aReport()
+	rep.TrackLengthM = 4000
+	rep.Corners = []corner{
+		{Turn: 4, ApexPct: 530, ApexKmh: 70, RefApexKmh: 80, DeficitKmh: 10, BrakeAtPct: 515},
+		{Turn: 3, ApexPct: 500, ApexKmh: 80, RefApexKmh: 86, DeficitKmh: 6},
+		{Turn: 1, ApexPct: 100, ApexKmh: 70, RefApexKmh: 74, DeficitKmh: 4, ExitKmh: 110},
+	}
+	e, out, asked := vendorSaying(t, lapAnswer{Cues: []turnLine{
+		{Turn: 4, Line: "Brake once for both and carry the speed."},
+		{Turn: 3, Line: "Turn 3, later."},
+		{Turn: 1, Line: "Turn 1, brake later."},
+	}})
+	res := postReport(t, e, rep)
+	r.Equal(http.StatusOK, res.Status, string(res.Body))
+	got := cuesOf(t, res)
+	r.Len(got.Cues, 2)
+	r.Equal(1, got.Cues[0].Turn)
+	r.Equal(3, got.Cues[1].Turn, "the joined line is filed under the first corner")
+	r.Equal(500, got.Cues[1].ApexPct)
+	r.Equal("Turn 3. Brake once for both and carry the speed.", got.Cues[1].Line)
+	r.Contains(out.String(), "turn 3 already has a line", "the second line for the same pair is dropped")
+	r.Contains(*asked, "Turns 3 and 4 are too close together")
+	r.Contains(*asked, "at most 2 lines in all")
+
+	// Six corners a straight apart, six lines written: four are kept.
+	wide := aReport()
+	wide.TrackLengthM = 6000
+	wide.Corners = nil
+	var lines []turnLine
+	for i := 1; i <= 6; i++ {
+		wide.Corners = append(wide.Corners, corner{Turn: i, ApexPct: i * 150, ApexKmh: 80, RefApexKmh: 90, DeficitKmh: 10})
+		lines = append(lines, turnLine{Turn: i, Line: fmt.Sprintf("Turn %d, brake later.", i)})
+	}
+	e2, out2, _ := vendorSaying(t, lapAnswer{Cues: lines})
+	res = postReport(t, e2, wide)
+	r.Equal(http.StatusOK, res.Status, string(res.Body))
+	r.Len(cuesOf(t, res).Cues, MaxCueLines)
+	r.Contains(out2.String(), "the lap already has 4 lines")
 }

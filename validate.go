@@ -28,10 +28,17 @@ const (
 	// MaxRaceWords is the ceiling on a cue.race line.
 	MaxRaceWords = 12
 	// MaxTrainingWords is the ceiling on a cue.training line.
-	MaxTrainingWords = 18
-	// MaxSentences is how many sentences a cue may be. Two short ones are
-	// allowed; a paragraph is not.
-	MaxSentences = 2
+	//
+	// It is what can be spoken in the longest run the client will ever hold a
+	// line for: twenty-five seconds from where the cue is raised to the braking
+	// point, less two for the silence before braking and the voice's own
+	// lead-in, at the pace a voice reads. It is a ceiling and not a target —
+	// what each corner actually gets is the time in front of it, and most
+	// corners get far less than this.
+	MaxTrainingWords = 50
+	// MaxSentences is how many sentences a cue may be. A long straight is
+	// room for three; a paragraph is still not allowed.
+	MaxSentences = 3
 )
 
 // symbolPattern is the units a speech engine reads badly.
@@ -73,28 +80,36 @@ func ValidateCue(lang string, kind CueKind, line string, corners []corner) error
 	for i := range corners {
 		allowed = append(allowed, corners[i].Turn)
 	}
-	return validateLine(lang, kind, line, allowed, "this lap's corners")
+	return validateLine(lang, kind, line, wordsFor(kind), allowed, "this lap's corners")
 }
 
 // ValidateCornerLine checks a line written for one corner. It may name that
 // turn and no other: the client speaks it in front of that corner, and a line
 // about Turn 5 heard before Turn 4 is a driver braking for the wrong bend.
 func ValidateCornerLine(lang string, kind CueKind, line string, turn int) error {
-	return validateLine(lang, kind, line, []int{turn}, fmt.Sprintf("this line is for turn %d", turn))
+	return validateLine(lang, kind, line, wordsFor(kind), []int{turn}, fmt.Sprintf("this line is for turn %d", turn))
 }
 
-// validateLine is the rules. allowed is every turn the line may name, and
-// among is how the refusal describes them.
-func validateLine(lang string, kind CueKind, line string, allowed []int, among string) error {
+// ValidateGroupLine checks a line written for a planned group of corners: it
+// may name any of them and no other, and it has the words the plan gave it,
+// which is what fits in front of the first corner.
+func ValidateGroupLine(lang string, kind CueKind, line string, g cueGroup) error {
+	turns := g.Turns()
+	among := fmt.Sprintf("this line is for turn %d", turns[0])
+	if len(turns) > 1 {
+		among = "this line is for " + strings.ToLower(turnList(turns))
+	}
+	return validateLine(lang, kind, line, min(g.Words, wordsFor(kind)), turns, among)
+}
+
+// validateLine is the rules. limit is the words the line may have, allowed is
+// every turn it may name, and among is how the refusal describes them.
+func validateLine(lang string, kind CueKind, line string, limit int, allowed []int, among string) error {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return &CueError{Rule: "it was empty", Line: line}
 	}
 
-	limit := MaxTrainingWords
-	if kind == CueRace {
-		limit = MaxRaceWords
-	}
 	if n := len(strings.Fields(line)); n > limit {
 		return &CueError{
 			Rule: fmt.Sprintf("%d words, and the limit for %s is %d", n, kind, limit),
@@ -113,13 +128,13 @@ func validateLine(lang string, kind CueKind, line string, allowed []int, among s
 	// Every turn it names has to be one it may name. This is the rule that
 	// matters most: a corner number is the one thing in a cue a driver acts
 	// on immediately and cannot check.
-	for _, m := range turnPatternFor(lang).FindAllStringSubmatch(line, -1) {
+	for _, named := range turnsNamed(lang, line) {
 		if len(allowed) == 0 {
 			return &CueError{Rule: "it names a turn and there were no corners to name one from", Line: line}
 		}
-		if !hasTurn(allowed, m[1]) {
+		if !hasTurn(allowed, named) {
 			return &CueError{
-				Rule: fmt.Sprintf("it names turn %s, which is not in %s", m[1], among),
+				Rule: fmt.Sprintf("it names turn %s, which is not in %s", named, among),
 				Line: line,
 			}
 		}

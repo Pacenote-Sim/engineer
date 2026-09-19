@@ -183,11 +183,60 @@ Whatever the prompt says, a line is checked in code after the model answers, and
 dropped rather than spoken. The client speaks its own line instead, so the coach can afford to be
 strict.
 
-- At most **18 words** in practice, qualifying and testing; **12** in a race, on the radio and off it.
+- At most **50 words** in practice, qualifying and testing; **12** in a race, on the radio and off it.
+  Fifty is not a style choice: it is what fits in the longest run the client will ever give a line,
+  twenty-five seconds of straight, at the pace a voice actually reads. Most corners get far less,
+  and each one is told how much it has.
 - At most **two sentences**.
 - Units as words. Never `km/h`, `kph`, `mph`, `°` or `%` — a speech engine reads them aloud.
-- A corner line may name **its own turn and no other**; the radio may name none.
+- A corner line may name **its own turn and no other**; the radio may name none. Corners joined into
+  one line may all be named — "Turns 3 and 4" — and every number in such a list is checked.
 - A line for a corner that was not in the report, or a second line for the same corner, is dropped.
+- A line has the **words that fit in front of its corner** (below), and a lap has at most **4 lines**.
+
+Every corner line names its corner first — "Turn 4, brake twenty metres later" — in the line's
+language ("Curva 4" in Spanish). The model is asked to; when it does not, the plugin puts the name in
+front before the line is checked and spoken, so a driver never hears advice without hearing which
+corner it is for. A number written as a word counts: "Curva uno" names Turn 1, in every language the
+coach writes in, up to thirty, and the English words are understood in all of them. A line that opens
+with the number alone, or with another language's word for a corner, is given this language's: "Turn
+uno" written in a Spanish line is spoken as "Curva 1".
+
+A measurement that cannot be true of a corner is dropped before the coach reads it, rather than said
+aloud: a throttle pickup more than a fifth of a lap after the apex is a client's arithmetic that
+wrapped, not an exit.
+
+### Fitting the lines to the lap
+
+A line is spoken on the straight before its corner and has to be over before the driver brakes, or
+it is cut. So the lap is planned before the coach is asked, from the report's own numbers:
+
+- The room in front of a corner is the time from the previous corner's apex to this corner's
+  braking point, at the speed the car is estimated to carry between them (from the exit and apex
+  speeds in the report; 150 kilometres per hour when it has none).
+- A line gets the words that fit in that time, less two seconds, at the pace a voice reads — 750
+  characters to the minute of audio is about 132 words, which is what the vendor's own metering
+  says — and never more than the twenty-five seconds the client will hold a line for, which is 50
+  words.
+  A corner with two seconds in front of it is told to say four words; a corner at the end of a long
+  straight is told it may explain itself.
+- A corner with room for fewer than 4 words — "Turn 4, brake later" — is joined to the corner before
+  it. The coach writes one line for the pair, naming both, spoken before the first; the client
+  files it under the first corner. The first corner of the lap never joins: the corner before it
+  is on the lap before.
+- A lap gets at most 4 lines. The corners come worst first and the coach is told to take those.
+- Without a circuit length there is no time to plan with, and every corner gets the session's limit.
+
+The client counts the same way and skips a line that would still not fit, so a driver never hears a
+line cut by the corner it was for.
+
+### The words it says them in
+
+A coach told only to write in Spanish writes English translated into Spanish: "recoge el gas" for
+lifting off, which no driver has ever heard on the radio. So each language carries the idiom of the
+trade — the braking point, the apex, trailing the brake, understeer, the kerb, the slipstream — in
+the words drivers themselves use, and the coach is told to stay in that register. It is given in
+English too, because a manual reads like a manual in any language.
 
 ## Changing what the coach says
 
@@ -198,6 +247,30 @@ alone stays as it ships, and goes back with one button. Every answer is stamped 
 the prompt that produced it.
 
 The rules above are enforced whatever you write.
+
+## What it costs to speak
+
+Every line sent to the voice plugin is paid for by the character at whatever vendor that plugin
+uses. Voice keeps what it has spoken, so the same words are never bought twice — a line repeated on
+a later lap, or the early Turn 1 line the full answer repeats, costs nothing the second time. What
+costs is new words, and a longer line is more of them.
+
+A client that will not play what it is sent says so on every lap, and then nothing is bought for it
+at all: a driver with the sound off, or with no voice plugin in their client, reads their lines and
+costs nobody anything.
+
+So a lap buys audio for its worst corners only. **Lines spoken aloud** in the settings says how many,
+worst corner first, two by default and at most the four a lap gets. The rest reach the driver as
+words and their own client reads them out for nothing. Zero buys no audio at all, and the whole
+thing can be turned off with **Speak the lines**.
+
+Two spoken lines is about half a minute of somebody talking in a lap that lasts a minute and a half.
+Four is most of the lap, which is why it is not the default. The Turn 1 line a client sends a lap
+ahead is never spoken for at all: the full lap writes Turn 1 again with everything in view, and that
+is the line the driver hears.
+
+What is never spoken, and never costs anything: the debrief, the setup notes and the driver profile.
+They are written to be read.
 
 ## Its own tables
 

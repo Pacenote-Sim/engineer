@@ -159,7 +159,7 @@ func (e *Engineer) lapCompleted(ctx context.Context, cfg config, ev plugin.Event
 		Session: plugin.SessionRace, Mode: CueRace, Reference: ev.Lap.Reference,
 		Cues: []cueLine{{Line: line}}, Model: cfg.model, Prompt: promptVersion, WrittenAt: e.clock(),
 	}
-	e.speakLines(ctx, cfg, filed.Cues)
+	e.speakLines(ctx, cfg, worstFirst(filed.Cues, nil))
 	if err := e.Store.SaveLapCues(ctx, filed); err != nil {
 		e.Log.LogAttrs(ctx, slog.LevelWarn, "the radio line was written but could not be filed",
 			slog.String("stint", ev.Session.StintID), slog.Int("lap", ev.Lap.Number), slog.String("reason", err.Error()))

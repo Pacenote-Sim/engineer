@@ -86,3 +86,27 @@ func TestMergedOrdersLinesAsHeard(t *testing.T) {
 	sortCues(tie)
 	r.Equal(4, tie[0].Turn)
 }
+
+// A throttle lag that cannot be true of a corner is dropped rather than
+// spoken: the client's arithmetic wrapped, and three kilometres between an
+// apex and a throttle is not something to tell a driver.
+func TestAnImpossibleThrottleLagIsDropped(t *testing.T) {
+	t.Parallel()
+	r := require.New(t)
+
+	body := []byte(`{"stint_id":"s1","lap":3,"session":"practice","track_length_m":3650,"corners":[
+		{"turn":1,"apex_pct":100,"apex_kmh":80,"deficit_kmh":5,"throttle_lag":982,"ref_throttle_lag":40},
+		{"turn":2,"apex_pct":300,"apex_kmh":90,"deficit_kmh":4,"throttle_lag":60,"ref_throttle_lag":-3},
+		{"turn":3,"apex_pct":500,"apex_kmh":70,"deficit_kmh":6,"throttle_lag":200}]}`)
+	rep, err := parseLapReport(body)
+	r.NoError(err)
+	r.Zero(rep.Corners[0].ThrottleLag, "982 thousandths of a lap is not an exit")
+	r.Equal(40, rep.Corners[0].RefThrottleLag)
+	r.Equal(60, rep.Corners[1].ThrottleLag)
+	r.Zero(rep.Corners[1].RefThrottleLag, "nor is a negative one")
+	r.Equal(MaxLagPct, rep.Corners[2].ThrottleLag, "at the bound it is still a measurement")
+
+	// And nothing about it reaches the coach.
+	r.NotContains(reportFacts(rep, nil), "3585")
+	r.NotContains(reportFacts(rep, nil), "throttle 982")
+}

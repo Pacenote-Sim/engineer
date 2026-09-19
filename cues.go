@@ -30,7 +30,7 @@ const (
 	// jobCues is what a lap's corner lines are metered as.
 	jobCues = "cues"
 	// lapTokens bounds one lap's answer: a dozen short lines and two notes.
-	lapTokens = 700
+	lapTokens = 1600
 )
 
 // postLap is POST /laps: a report in, the lines out. The cost is on the
@@ -108,8 +108,9 @@ func (e *Engineer) writeCues(ctx context.Context, cfg config, rep lapReport, not
 	}
 	system = inLanguage(system, cfg.language)
 
-	raw, spent, err := e.client(cfg).Ask(ctx, system, reportFacts(rep, notes),
-		lapTool(wordsFor(kind), rep.turns(), rep.SetupOpen), lapTokens)
+	groups := planLines(rep, kind)
+	raw, spent, err := e.client(cfg).Ask(ctx, system, reportFactsFor(rep, groups, notes),
+		lapTool(wordsFor(kind), leadTurns(groups), rep.SetupOpen), lapTokens)
 	use := usageOf(jobCues, cfg.model, spent)
 	if err != nil {
 		return LapCues{}, use, e.vendorError(ctx, jobCues, err)
@@ -129,9 +130,14 @@ func (e *Engineer) writeCues(ctx context.Context, cfg config, rep lapReport, not
 		Reference: rep.Reference, Cues: []cueLine{}, Model: cfg.model, Prompt: promptVersion,
 		WrittenAt: e.clock(),
 	}
-	given := make(map[int]*corner, len(rep.Corners))
-	for i := range rep.Corners {
-		given[rep.Corners[i].Turn] = &rep.Corners[i]
+	// A line is filed under the group it is for — under the first corner of
+	// joined corners, whichever of them the model named — and each group gets
+	// one line, the lap at most MaxCueLines.
+	groupOf := make(map[int]*cueGroup, len(rep.Corners))
+	for i := range groups {
+		for _, t := range groups[i].Turns() {
+			groupOf[t] = &groups[i]
+		}
 	}
 	said := make(map[int]bool, len(answer.Cues))
 	for _, a := range answer.Cues {
@@ -140,27 +146,33 @@ func (e *Engineer) writeCues(ctx context.Context, cfg config, rep lapReport, not
 			continue
 		}
 		turn := int(a.Turn)
-		c, ok := given[turn]
+		g, ok := groupOf[turn]
 		switch {
 		case !ok:
 			e.discard(ctx, kind, &CueError{Rule: fmt.Sprintf("it is for turn %d, which was not in the report", turn), Line: line})
 			continue
-		case said[turn]:
-			e.discard(ctx, kind, &CueError{Rule: fmt.Sprintf("turn %d already has a line", turn), Line: line})
+		case said[g.Lead().Turn]:
+			e.discard(ctx, kind, &CueError{Rule: fmt.Sprintf("turn %d already has a line", g.Lead().Turn), Line: line})
+			continue
+		case len(out.Cues) >= MaxCueLines:
+			e.discard(ctx, kind, &CueError{Rule: fmt.Sprintf("the lap already has %d lines", MaxCueLines), Line: line})
 			continue
 		}
-		if err := ValidateCornerLine(cfg.language, kind, line, turn); err != nil {
+		line = EnsureTurnNamed(cfg.language, line, g.Lead().Turn)
+		if err := ValidateGroupLine(cfg.language, kind, line, *g); err != nil {
 			e.discard(ctx, kind, err)
 			continue
 		}
-		said[turn] = true
-		out.Cues = append(out.Cues, cueLine{Turn: turn, ApexPct: c.ApexPct, Line: line})
+		said[g.Lead().Turn] = true
+		out.Cues = append(out.Cues, cueLine{Turn: g.Lead().Turn, ApexPct: g.Lead().ApexPct, Line: line})
 	}
 	sortCues(out.Cues)
 	if rep.SetupOpen {
 		out.SetupNotes = cleanNotes([]string(answer.SetupNotes))
 	}
-	e.speakLines(ctx, cfg, out.Cues)
+	if !rep.Early && !rep.Silent {
+		e.speakLines(ctx, cfg, worstFirst(out.Cues, ranks(rep.Corners)))
+	}
 	return out, use, nil
 }
 
@@ -408,11 +420,11 @@ func (a *modelAnswer) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(raw.Cues, &a.Cues)
 }
 
-// inLanguage adds the language the coach writes in to a system prompt, when it
-// is not English.
+// inLanguage adds the language the coach writes in to a system prompt, and the
+// words a driver in that language is spoken to with.
 func inLanguage(system, code string) string {
 	if extra := languageLine(code); extra != "" {
-		return system + "\n\n" + extra
+		system += "\n\n" + extra
 	}
-	return system
+	return system + "\n\n" + speaksLine(code)
 }

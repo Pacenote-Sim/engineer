@@ -95,11 +95,22 @@ func TestCueWordLimits(t *testing.T) {
 	// The same line is fine as a training cue.
 	r.NoError(ValidateCue("en", CueTraining, long, corners))
 
-	// Nineteen is not.
-	r.Error(ValidateCue("en", CueTraining, strings.TrimSpace(strings.Repeat("word ", 19)), corners))
+	// Fifty-one is not: a line has to be spoken in the run the client gives
+	// it, and fifty words is the longest run there is.
+	err = ValidateCue("en", CueTraining, strings.TrimSpace(strings.Repeat("word ", 51)), corners)
+	r.Error(err)
+	r.Contains(err.Error(), "limit for cue.training is 50")
 	// Exactly at the limit is allowed, not one short of it.
 	r.NoError(ValidateCue("en", CueRace, strings.TrimSpace(strings.Repeat("word ", 12)), corners))
-	r.NoError(ValidateCue("en", CueTraining, strings.TrimSpace(strings.Repeat("word ", 18)), corners))
+	r.NoError(ValidateCue("en", CueTraining, strings.TrimSpace(strings.Repeat("word ", 50)), corners))
+
+	// The longest line either kind allows is one the client can speak before
+	// the driver brakes: the words, at the pace a voice reads them, plus what
+	// the client keeps free, inside the lead it starts at.
+	for _, kind := range []CueKind{CueRace, CueTraining} {
+		fits := float64(wordsFor(kind))/WordsPerSecond + SpeakMargin
+		r.LessOrEqual(fits, LeadSeconds, kind)
+	}
 }
 
 func TestACueThatIsAParagraph(t *testing.T) {
@@ -107,8 +118,8 @@ func TestACueThatIsAParagraph(t *testing.T) {
 	r := require.New(t)
 
 	corners := cornersNumbered(4)
-	r.Error(ValidateCue("en", CueTraining, "One. Two. Three.", corners))
-	r.NoError(ValidateCue("en", CueTraining, "One. Two.", corners))
+	r.Error(ValidateCue("en", CueTraining, "Brake. Turn in. Get on the power. Hold it.", corners))
+	r.NoError(ValidateCue("en", CueTraining, "Brake. Turn in. Get on the power.", corners))
 
 	// A decimal point is not the end of a sentence, and a cue full of lap
 	// times is full of decimal points.
@@ -148,4 +159,29 @@ func TestAnEmptyCue(t *testing.T) {
 	var cue *CueError
 	r.ErrorAs(err, &cue)
 	r.Equal("it was empty", cue.Rule)
+}
+
+// A line for joined corners may name any of them and no other, and has the
+// words the plan gave it rather than the session's limit.
+func TestALineForJoinedCornersNamesThem(t *testing.T) {
+	t.Parallel()
+	r := require.New(t)
+
+	g := cueGroup{Corners: []*corner{{Turn: 3, ApexPct: 500}, {Turn: 4, ApexPct: 530}}, Words: 9}
+	r.NoError(ValidateGroupLine("en", CueTraining, "Turns 3 and 4, brake once and carry speed.", g))
+	r.NoError(ValidateGroupLine("en", CueTraining, "Turn 4 follows Turn 3, brake once.", g))
+
+	err := ValidateGroupLine("en", CueTraining, "Turns 3 and 9, brake once.", g)
+	r.Error(err)
+	r.Contains(err.Error(), "names turn 9, which is not in this line is for turns 3 and 4")
+
+	err = ValidateGroupLine("en", CueTraining, "Turns 3 and 4, brake once and carry the speed through.", g)
+	r.Error(err)
+	r.Contains(err.Error(), "11 words, and the limit for cue.training is 9")
+
+	// The plan's words never raise the session's limit.
+	wide := cueGroup{Corners: []*corner{{Turn: 3}}, Words: 40}
+	r.Error(ValidateGroupLine("en", CueRace, strings.TrimSpace(strings.Repeat("word ", 13)), wide))
+	err = ValidateGroupLine("en", CueRace, "Brake later into Turn 5.", wide)
+	r.Contains(err.Error(), "this line is for turn 3")
 }

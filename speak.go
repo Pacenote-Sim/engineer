@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -22,11 +23,30 @@ import (
 // askVoice is the plugin asked, and what it is asked for. Any plugin named
 // voice that answers voice.speak will do; this one knows nothing about which.
 const (
-	askVoice   = "voice"
-	kindSpeak  = "voice.speak"
-	speakEach  = 4 * time.Second
-	audioLines = 24
+	askVoice  = "voice"
+	kindSpeak = "voice.speak"
+	speakEach = 4 * time.Second
 )
+
+// worstFirst is the lines to buy audio for, the corner that lost the most
+// first. The cues themselves are in the order they will be heard, which is the
+// order round the lap; what a corner cost is in the report, so the ranking
+// comes from there. A line for a corner the report does not have — the radio's,
+// which is for no corner — goes last rather than nowhere.
+func worstFirst(cues []cueLine, rank map[int]int) []*cueLine {
+	out := make([]*cueLine, 0, len(cues))
+	for i := range cues {
+		out = append(out, &cues[i])
+	}
+	place := func(c *cueLine) int {
+		if p, ok := rank[c.Turn]; ok {
+			return p
+		}
+		return len(cues)
+	}
+	sort.SliceStable(out, func(a, b int) bool { return place(out[a]) < place(out[b]) })
+	return out
+}
 
 // Connected is the host handing this plugin the way to ask other plugins. It
 // is called once, before Settings, and kept.
@@ -49,17 +69,23 @@ type spoken struct {
 	ContentType string `json:"content_type"`
 }
 
-// speakLines asks voice for every line, at once, and attaches what comes back.
-// A line voice could not speak keeps its words and gets no audio; the first
-// failure of a lap is logged, once, at a level that says whether the operator
-// should care — voice not installed is not a problem, voice refusing is.
-func (e *Engineer) speakLines(ctx context.Context, cfg config, cues []cueLine) {
+// speakLines asks voice for the lines that are spoken aloud, at once, and
+// attaches what comes back. A line voice could not speak keeps its words and
+// gets no audio; the first failure of a lap is logged, once, at a level that
+// says whether the operator should care — voice not installed is not a
+// problem, voice refusing is.
+//
+// Only the first few lines are sent, and the cues arrive worst corner first,
+// so what is bought is audio for the corners that lost the most. The rest
+// travel as words and the client reads them out itself, which costs nobody
+// anything. How many is the operator's setting, because it is their bill.
+func (e *Engineer) speakLines(ctx context.Context, cfg config, cues []*cueLine) {
 	host := e.askable()
-	if host == nil || !cfg.speak || len(cues) == 0 {
+	if host == nil || !cfg.speak || cfg.audio <= 0 || len(cues) == 0 {
 		return
 	}
-	if len(cues) > audioLines {
-		cues = cues[:audioLines]
+	if len(cues) > cfg.audio {
+		cues = cues[:cfg.audio]
 	}
 
 	var wg sync.WaitGroup

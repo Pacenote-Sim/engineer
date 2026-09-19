@@ -17,6 +17,7 @@ const (
 	SettingRacePace = "racepace"
 	SettingSetup    = "setup"
 	SettingSpeak    = "speak"
+	SettingAudio    = "audio_lines"
 	SettingLanguage = "language"
 	SettingKeepDays = "keep_days"
 )
@@ -30,6 +31,19 @@ const (
 	ModelSonnet = "claude-sonnet-5"
 	ModelHaiku  = "claude-haiku-4-5-20251001"
 )
+
+// DefaultAudioLines is how many of a lap's lines are spoken aloud by default.
+//
+// Every one of them is paid for by the character at whatever vendor the voice
+// plugin uses, and a driver takes in two of them a lap. Two spoken lines is
+// half a minute of somebody talking in a lap that lasts a minute and a half;
+// four is most of the lap. A lap that ends with four lines written and two
+// spoken is not a lap missing two lines — the others are there to read — it is
+// a lap that did not buy audio for the corners that lost the least.
+const DefaultAudioLines = 2
+
+// MaxAudioLines is the ceiling on that setting: a lap's lines, and no more.
+const MaxAudioLines = MaxCueLines
 
 // DefaultKeepDays is how long a debrief is kept. A season is the unit a driver
 // thinks in, and a debrief older than that is not something anybody reads — but
@@ -97,6 +111,16 @@ func Settings() []plugin.Setting {
 			Default: "true",
 		},
 		{
+			Name:  SettingAudio,
+			Label: "Lines spoken aloud",
+			Help: "How many of a lap's lines are sent to voice, worst corner first. The voice plugin bills by " +
+				"the character and never pays twice for the same words, so this is what a new line costs. The " +
+				"rest reach the driver as words, which their own client reads out for nothing. Zero buys no audio.",
+			Kind:        plugin.KindNumber,
+			Default:     "2",
+			Placeholder: "2",
+		},
+		{
 			Name:        SettingKeepDays,
 			Label:       "Keep debriefs and cues for",
 			Help:        "Days. A stint's worth is a few kilobytes and a season is about 180 days. Zero keeps them for ever.",
@@ -116,6 +140,7 @@ type config struct {
 	racePace bool
 	setup    bool
 	speak    bool
+	audio    int
 	language string
 	keepDays int
 }
@@ -138,6 +163,11 @@ func configOf(values plugin.Values, secrets plugin.Secrets) config {
 		c.keepDays = days
 	} else {
 		c.keepDays = DefaultKeepDays
+	}
+	if n, ok := values.Int(SettingAudio); ok && n >= 0 {
+		c.audio = min(n, MaxAudioLines)
+	} else {
+		c.audio = DefaultAudioLines
 	}
 	if c.model == "" {
 		c.model = ModelSonnet
